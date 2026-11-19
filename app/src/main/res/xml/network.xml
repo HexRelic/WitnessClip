@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- RFC 3161 timestamp authorities speak plain HTTP; their replies are signed, so transport
+     encryption adds nothing. Cleartext is allowed for these hosts only. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">timestamp.sectigo.com</domain>
+        <domain includeSubdomains="false">tss.accv.es</domain>
+        <domain includeSubdomains="false">tsa.izenpe.com</domain>
+    </domain-config>
+</network-security-config>

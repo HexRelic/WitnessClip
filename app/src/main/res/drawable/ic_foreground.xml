@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shield with waveform, from design/icon (512 box scaled into the 66dp adaptive safe zone). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <group android:scaleX="0.155" android:scaleY="0.155" android:translateX="14.32" android:translateY="14.32">
+        <path android:pathData="M256,60 L420,122 L420,268 C420,362 352,424 256,452 C160,424 92,362 92,268 L92,122 Z"
+            android:fillColor="#22344E" android:strokeColor="#35D0BA" android:strokeWidth="16" android:strokeLineJoin="round" />
+        <path android:fillColor="#F4F7FB" android:pathData="M173,231 a11,11 0 0 1 22,0 v42 a11,11 0 0 1 -22,0 z" />
+        <path android:fillColor="#F4F7FB" android:pathData="M209,203 a11,11 0 0 1 22,0 v98 a11,11 0 0 1 -22,0 z" />
+        <path android:fillColor="#35D0BA" android:pathData="M245,179 a11,11 0 0 1 22,0 v146 a11,11 0 0 1 -22,0 z" />
+        <path android:fillColor="#F4F7FB" android:pathData="M281,203 a11,11 0 0 1 22,0 v98 a11,11 0 0 1 -22,0 z" />
+        <path android:fillColor="#F4F7FB" android:pathData="M317,231 a11,11 0 0 1 22,0 v42 a11,11 0 0 1 -22,0 z" />
+    </group>
+</vector>

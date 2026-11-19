@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Recordings never leave the phone through cloud backup or phone-to-phone transfer.
+     Their signing keys are hardware-bound and would not move with them anyway. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" /><exclude domain="file" /><exclude domain="database" /><exclude domain="sharedpref" /><exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" /><exclude domain="file" /><exclude domain="database" /><exclude domain="sharedpref" /><exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>

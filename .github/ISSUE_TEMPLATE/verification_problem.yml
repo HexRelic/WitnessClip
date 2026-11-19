@@ -1,0 +1,45 @@
+name: Verification problem
+description: A recording does not verify, verifies when it should not, or a check is unclear
+labels: ["verification"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **If a modified or forged file is reported as valid, that is a security issue: report it privately, see SECURITY.md.**
+
+        Do not attach a recording of a private conversation. Make a short test recording that shows the same problem, or paste the verifier output only.
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where did you verify?
+      options:
+        - In the app
+        - Command-line verifier
+        - Manually with VERIFY.txt (sha256sum, ffmpeg, openssl)
+        - Another tool (say which below)
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Verifier output
+      description: The list of checks with their result, or the error message.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: history
+    attributes:
+      label: What happened to the file
+      description: How it was exported, copied, sent or converted between recording and verifying (USB, email, cloud drive, messaging app, PCT filing…).
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version that made the recording, and version that verified it
+      placeholder: "recorded with 0.1.0, verified with 0.1.0"
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
