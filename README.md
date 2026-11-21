@@ -14,13 +14,11 @@
   <a href="docs/REPRODUCIBLE.md"><img src="https://img.shields.io/badge/build-reproducible-brightgreen" alt="Reproducible build"></a>
 </p>
 
-<!-- F-Droid badge: uncomment once the app is published on F-Droid.
 <p align="center">
-  <a href="https://f-droid.org/packages/io.github.hexrelic.witnessclip/">
-    <img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png" alt="Get it on F-Droid" height="80">
+  <a href="https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/HexRelic/WitnessClip">
+    <img src="https://raw.githubusercontent.com/ImranR98/Obtainium/main/assets/graphics/badge_obtainium.png" alt="Get it on Obtainium" height="54">
   </a>
 </p>
--->
 
 WitnessClip is an Android voice recorder built for one job: making a recording you can use as
 evidence. When a recording ends up in front of a judge, the first question is usually whether
@@ -100,8 +98,27 @@ walks through the same checks with `sha256sum`, `ffmpeg` and `openssl`.
 
 ## Installing
 
-Signed APKs are on the [releases page](https://github.com/HexRelic/WitnessClip/releases).
-Before installing, compare the signing certificate with the one published in
+All three ways below install the same APK, signed with the same key, so you can switch between
+them without reinstalling.
+
+- **Obtainium:** tap the badge at the top of this page on your phone, or add
+  `https://github.com/HexRelic/WitnessClip` in Obtainium. It installs from the releases page
+  and keeps the app updated.
+- **F-Droid, Droid-ify or Neo Store:** add the HexRelic repository at
+  `https://hexrelic.github.io/fdroid/repo`. The client checks the repository key against this
+  fingerprint:
+
+  ```
+  BB1709DC3912D984DF24876838BCF2A168500F2072516125BA6C3BF942E1731E
+  ```
+
+  Or open
+  [this link](https://fdroid.link/#https://hexrelic.github.io/fdroid/repo?fingerprint=BB1709DC3912D984DF24876838BCF2A168500F2072516125BA6C3BF942E1731E)
+  on your phone, which adds the address and fingerprint in one step.
+- **Manually:** download the APK from the
+  [releases page](https://github.com/HexRelic/WitnessClip/releases).
+
+Before installing manually, compare the signing certificate with the one published in
 [docs/REPRODUCIBLE.md](docs/REPRODUCIBLE.md).
 
 ## Building
