@@ -112,9 +112,11 @@ them without reinstalling.
   BB1709DC3912D984DF24876838BCF2A168500F2072516125BA6C3BF942E1731E
   ```
 
-  Or open
+  Or scan this QR code with the client, or open
   [this link](https://fdroid.link/#https://hexrelic.github.io/fdroid/repo?fingerprint=BB1709DC3912D984DF24876838BCF2A168500F2072516125BA6C3BF942E1731E)
-  on your phone, which adds the address and fingerprint in one step.
+  on your phone; both add the address and fingerprint in one step.
+
+  <a href="https://hexrelic.github.io/fdroid/repo/index.png"><img src="https://hexrelic.github.io/fdroid/repo/index.png" width="200" alt="QR code to add the HexRelic F-Droid repository"></a>
 - **Manually:** download the APK from the
   [releases page](https://github.com/HexRelic/WitnessClip/releases).
 
