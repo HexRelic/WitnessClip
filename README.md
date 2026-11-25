@@ -20,6 +20,15 @@
   </a>
 </p>
 
+<p align="center">
+  <a href="https://hexrelic.github.io/">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/images/website-card-dark.svg">
+      <img src="docs/images/website-card-light.svg" alt="See it working before you install: open hexrelic.github.io" width="880">
+    </picture>
+  </a>
+</p>
+
 WitnessClip is an Android voice recorder built for one job: making a recording you can use as
 evidence. When a recording ends up in front of a judge, the first question is usually whether
 it was edited. Most recorders can't answer that. WitnessClip seals the audio while you are
