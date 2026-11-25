@@ -25,22 +25,34 @@ live timestamp services.
 
 ## 1. Overview
 
+```mermaid
+flowchart TD
+    subgraph s1["1. At start"]
+        direction LR
+        key["Recording key created<br/>in secure hardware"]
+        open["Opening qualified timestamp<br/>if online"]
+        open -.->|"bound into the key's attestation"| key
+    end
+    subgraph s2["2. While recording"]
+        direction LR
+        mic(["Microphone"]) --> slices["One-second<br/>slices"]
+        slices --> log["Sealed log<br/>Merkle tree, RFC 6962"]
+        log -->|"every 10 s"| cp["Checkpoint signed<br/>by the recording key"]
+        cp -->|"every 5 min,<br/>if online"| mid["Qualified timestamp<br/>of the checkpoint"]
+    end
+    subgraph s3["3. At stop"]
+        direction LR
+        manifest["Manifest signed by the recording key<br/>all entries, checkpoints, keys"]
+        manifest --> flac[("recording.flac<br/>audio + proof")]
+        manifest -->|"when online"| close["Two qualified timestamps<br/>of the manifest"]
+        close -->|"written into the file"| flac
+    end
+    s1 --> s2 --> s3
 ```
- microphone ──► capture loop ──► one-second slices ──► FLAC frames on disk (frames.bin)
-                                        │
-                                        ▼
-                          sealed log (Merkle tree, RFC 6962)
-                                        │  every 10 s
-                                        ▼
-                    checkpoint signed by a hardware key ──► journal.jsonl
-                                        │  every 5 min, if online
-                                        ▼
-                      qualified timestamp of that checkpoint
- stop ─► manifest (all entries, checkpoints, keys) signed ─► recording.flac (audio + proof)
-                                        │  when online
-                                        ▼
-                  two qualified timestamps of the manifest, written into the file
-```
+
+While recording, the audio and every log entry are written to disk as they happen
+(`frames.bin` and `journal.jsonl`), so an interrupted recording can still be recovered and
+sealed; see [6. Storage and crash recovery](#6-storage-and-crash-recovery-app-appkt-finisherkt).
 
 Two modules:
 
@@ -88,7 +100,21 @@ Optional inputs and context:
 
 ## 3. The sealed log (`core`, `Merkle.kt`, `Sealer.kt`, `Model.kt`)
 
-A Merkle tree exactly as in RFC 6962 (Certificate Transparency):
+A Merkle tree exactly as in RFC 6962 (Certificate Transparency). Every second of audio and
+every event is a leaf; the root covers all of them:
+
+```mermaid
+flowchart BT
+    l1["Leaf 1<br/>audio, second 1"] --> n1["Node"]
+    l2["Leaf 2<br/>audio, second 2"] --> n1
+    l3["Leaf 3<br/>event: mark"] --> n2["Node"]
+    l4["Leaf 4<br/>audio, second 3"] --> n2
+    n1 --> root["Root"]
+    n2 --> root
+    root --> cp["Checkpoint, every 10 s<br/>session ID, entry count, root, clocks<br/>signed by the recording key"]
+```
+
+How each hash is computed:
 
 ```
 leaf  = SHA-256( 0x00 ‖ entry bytes )
