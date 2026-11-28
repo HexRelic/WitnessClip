@@ -88,16 +88,26 @@ class Bundle(val manifestBytes: ByteArray, val signature: ByteArray, val closeTo
 
     companion object {
         private const val MAX_UNPACKED = 192 * 1024 * 1024
+        /**
+         * A real bundle is hashes, signatures and certificates: it shrinks about 2.5 times, and
+         * even an all-silent recording stays under 25 times. Anything expanding further than
+         * this is not evidence, and would only make a small file cost a lot of memory.
+         */
+        private const val MAX_RATIO = 64
+        /** Small bundles are never held to the ratio. */
+        private const val MIN_UNPACKED = 1024 * 1024
 
         fun decode(zip: ByteArray): Bundle {
             val files = HashMap<String, ByteArray>()
+            // Bounded: a hostile file must not be able to expand into gigabytes, nor into far
+            // more than its own size.
+            val limit = (zip.size.toLong() * MAX_RATIO).coerceIn(MIN_UNPACKED.toLong(), MAX_UNPACKED.toLong())
             ZipInputStream(ByteArrayInputStream(zip)).use { z ->
-                // Bounded: a hostile file must not be able to expand into gigabytes.
                 var total = 0L
                 while (true) {
                     val e = z.nextEntry ?: break
                     if (files.size >= 64) throw IllegalArgumentException("too many evidence files")
-                    val data = readCapped(z, (MAX_UNPACKED - total).toInt())
+                    val data = readCapped(z, (limit - total).toInt())
                     total += data.size
                     files[e.name] = data
                 }

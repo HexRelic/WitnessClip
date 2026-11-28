@@ -74,6 +74,10 @@ object Verifier {
     /** Never throws: a file that cannot be understood is reported as a failed check. */
     fun verify(flac: InputStream): Report = try { check(flac) } catch (e: Exception) {
         Report(listOf(Check("bundle", Status.FAIL, "Malformed evidence: ${e.javaClass.simpleName} ${e.message ?: ""}".trim())), null, null, null, null, 0.0, 0)
+    } catch (e: OutOfMemoryError) {
+        // Everything allocated for this file is unreachable again here. A file that could
+        // not be checked must never read as passing, so this is a failed check too.
+        Report(listOf(Check("bundle", Status.FAIL, "File too large to check with the memory available.")), null, null, null, null, 0.0, 0)
     }
 
     private fun need(ok: Boolean, what: String) { if (!ok) throw IllegalArgumentException(what) }
@@ -227,10 +231,24 @@ object Verifier {
         m.entries.forEachIndexed { i, e -> framesBefore[i + 1] = framesBefore[i] + (if (e.k == "a") e.f else 0) }
         var lastMid: Date? = null
         var lastMidSeconds = 0.0
+        // Every checkpoint's digest is computed once, so each intermediate timestamp is read
+        // once however many checkpoints share its size. The result is the same as trying them
+        // in order: the first checkpoint of that size whose digest the token covers (the digest
+        // commits to the size), and a root that is not hex before it makes the timestamp unreadable.
+        val cpAt = HashMap<String, Int>()      // digest -> first checkpoint with it
+        val badRootAt = HashMap<Int, Int>()    // size -> first checkpoint of that size whose root is not hex
+        m.checkpoints.forEachIndexed { i, c ->
+            try { cpAt.putIfAbsent(sha256(Wire.checkpoint(sid, c.size, c.root.unhex(), c.en, c.w)).hex(), i) }
+            catch (e: IllegalArgumentException) { badRootAt.putIfAbsent(c.size, i) }
+        }
+        val cpSizes = m.checkpoints.mapTo(HashSet()) { it.size }
         for (a in m.mid.sortedBy { it.size }) {
             try {
                 val raw = a.token.unb64()
-                val cp = m.checkpoints.firstOrNull { it.size == a.size && Tsa.inspect(raw, sha256(Wire.checkpoint(sid, it.size, it.root.unhex(), it.en, it.w))).imprintMatches }
+                val at = if (a.size !in cpSizes) null else Tsa.imprint(raw)?.let { cpAt[it.hex()] }?.takeIf { m.checkpoints[it].size == a.size }
+                val bad = badRootAt[a.size]
+                if (bad != null && (at == null || bad < at)) throw IllegalArgumentException("invalid hex digit")
+                val cp = at?.let { m.checkpoints[it] }
                 val t = cp?.let { Tsa.inspect(raw, sha256(Wire.checkpoint(sid, it.size, it.root.unhex(), it.en, it.w))) }
                 val covered = framesBefore[a.size.coerceIn(0, m.entries.size)].toDouble() / m.audio.sampleRate
                 when {

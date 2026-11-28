@@ -83,15 +83,22 @@ class FlacDecoder private constructor(private val r: BitReader, val info: Stream
         if (b0 < 0) return null
         val b1 = r.int(8)
         if (b0 != 0xFF || (b1 and 0xFE) != 0xF8) throw FlacFormatException("lost frame sync")
+        // Everything here that reference decoders (ffmpeg, libFLAC) refuse is refused too:
+        // otherwise a file could verify here while other players drop or alter that audio.
         val bsCode = r.int(4)
         val srCode = r.int(4)
         val chCode = r.int(4)
         val ssCode = r.int(3)
-        r.int(1)
-        var first = r.int(8)
+        if (r.int(1) != 0) throw FlacFormatException("reserved header bit set")
+        if (chCode > 10) throw FlacFormatException("reserved channel assignment")
+        if (srCode == 15) throw FlacFormatException("invalid sample rate code")
+        // Frame number, UTF-8 coded: at most 6 bytes, every byte after the first is 10xxxxxx.
+        val lead = r.int(8)
+        if (lead and 0xC0 == 0x80 || lead >= 0xFE) throw FlacFormatException("invalid frame number")
+        var first = lead
         var extra = 0
         while (first and 0x80 != 0) { extra++; first = first shl 1 }
-        if (extra > 0) r.skip(extra - 1)
+        repeat(maxOf(extra - 1, 0)) { if (r.int(8) and 0xC0 != 0x80) throw FlacFormatException("invalid frame number") }
         val n = when (bsCode) {
             1 -> 192
             in 2..5 -> 576 shl (bsCode - 2)
@@ -100,13 +107,22 @@ class FlacDecoder private constructor(private val r: BitReader, val info: Stream
             in 8..15 -> 256 shl (bsCode - 8)
             else -> throw FlacFormatException("reserved block size")
         }
-        when (srCode) { 12 -> r.skip(1); 13, 14 -> r.skip(2) }
+        val frameRate = when (srCode) {
+            0 -> sampleRate
+            1 -> 88200; 2 -> 176400; 3 -> 192000; 4 -> 8000; 5 -> 16000; 6 -> 22050
+            7 -> 24000; 8 -> 32000; 9 -> 44100; 10 -> 48000; 11 -> 96000
+            12 -> r.int(8) * 1000
+            13 -> r.int(16)
+            else -> r.int(16) * 10
+        }
         val headerCrc = r.crc8
         if (r.int(8) != headerCrc) throw FlacFormatException("frame header CRC mismatch")
         val depth = when (ssCode) { 0 -> bps; 1 -> 8; 2 -> 12; 4 -> 16; 5 -> 20; 6 -> 24; 7 -> 32; else -> throw FlacFormatException("reserved sample size") }
         val nch = if (chCode < 8) chCode + 1 else 2
         if (nch != channels) throw FlacFormatException("channel count changed mid-stream")
         if (depth != bps) throw FlacFormatException("sample size changed mid-stream")
+        if (frameRate != sampleRate) throw FlacFormatException("sample rate changed mid-stream")
+        if (n > 65535 || info != null && n > info.maxBlock) throw FlacFormatException("block larger than the stream allows")
         if (chans[0].size < n) { chans = Array(channels) { IntArray(n) }; outBuf = IntArray(n * channels) }
         for (c in 0 until nch) {
             val side = (chCode == 8 && c == 1) || (chCode == 9 && c == 0) || (chCode == 10 && c == 1)
@@ -124,6 +140,9 @@ class FlacDecoder private constructor(private val r: BitReader, val info: Stream
                 chans[0][i] = (m + s) shr 1; chans[1][i] = (m - s) shr 1
             }
         }
+        // Undoing the stereo coding can leave the bit depth; reference decoders then clip or
+        // wrap, while the hash would see only the low bits.
+        if (chCode >= 8) for (c in 0 until 2) checkRange(chans[c], n, bps)
         if (channels == 1) System.arraycopy(chans[0], 0, outBuf, 0, n)
         else for (i in 0 until n) for (c in 0 until channels) outBuf[i * channels + c] = chans[c][i]
         blockFrames = n
@@ -157,7 +176,13 @@ class FlacDecoder private constructor(private val r: BitReader, val info: Stream
                 if (order > n) throw FlacFormatException("predictor longer than block")
                 for (i in 0 until order) x[i] = r.signed(depth)
                 val precision = r.int(4) + 1
+                // Code 1111 is invalid FLAC; reference decoders drop the frame, so accepting it
+                // would let a file verify here while other players skip that audio.
+                if (precision == 16) throw FlacFormatException("invalid LPC precision")
                 val shift = r.signed(5)
+                // The field is signed, but a negative shift is not valid FLAC and the reference
+                // decoder rejects it; a negative Long shift would silently mean something else.
+                if (shift < 0) throw FlacFormatException("negative LPC shift")
                 val coef = IntArray(order) { r.signed(precision) }
                 residual(x, n, order)
                 for (i in order until n) {
@@ -168,7 +193,16 @@ class FlacDecoder private constructor(private val r: BitReader, val info: Stream
             }
             else -> throw FlacFormatException("reserved subframe type")
         }
+        // Every sample must fit the subframe's bit depth. Past it, predictors in other decoders
+        // overflow differently (32-bit sums) and the decoded audio would no longer be the same.
+        checkRange(x, n, depth)
         if (wasted > 0) for (i in 0 until n) x[i] = x[i] shl wasted
+    }
+
+    private fun checkRange(x: IntArray, n: Int, bits: Int) {
+        val lo = -(1 shl (bits - 1))
+        val hi = (1 shl (bits - 1)) - 1
+        for (i in 0 until n) if (x[i] < lo || x[i] > hi) throw FlacFormatException("sample outside the bit depth")
     }
 
     private fun residual(x: IntArray, n: Int, order: Int) {
@@ -188,8 +222,13 @@ class FlacDecoder private constructor(private val r: BitReader, val info: Stream
                 while (i < end) { x[i++] = if (raw == 0) 0 else r.signed(raw) }
             } else {
                 while (i < end) {
-                    val u = (r.unary() shl k) or (if (k > 0) r.int(k) else 0)
-                    x[i++] = (u ushr 1) xor -(u and 1)
+                    val q = r.unary()
+                    val u = (q.toLong() shl k) or (if (k > 0) r.int(k).toLong() else 0L)
+                    // A residual must fit 32 bits and not be the most negative value, as in
+                    // ffmpeg and libFLAC; larger codes would wrap here and be refused there.
+                    if (q < 0 || u > 0xFFFFFFFEL) throw FlacFormatException("invalid residual")
+                    val v = u.toInt()
+                    x[i++] = (v ushr 1) xor -(v and 1)
                 }
             }
         }
@@ -204,6 +243,9 @@ class FlacDecoder private constructor(private val r: BitReader, val info: Stream
             if (!r.bytes(4).contentEquals("fLaC".toByteArray())) throw FlacFormatException("not a FLAC file")
             var info: StreamInfo? = null
             val apps = HashMap<String, ByteArray>()
+            // Pieces of the evidence, joined once at the end: joining as they arrive would
+            // copy everything read so far again for every piece.
+            val pieces = ArrayList<ByteArray>()
             var evidenceSize = 0L
             var blocks = 0
             while (true) {
@@ -218,11 +260,18 @@ class FlacDecoder private constructor(private val r: BitReader, val info: Stream
                     if (id == FlacFile.APP_ID) {
                         evidenceSize += len - 4
                         if (evidenceSize > FlacFile.MAX_EVIDENCE) throw FlacFormatException("evidence block too large")
-                        apps[id] = (apps[id] ?: ByteArray(0)) + r.bytes(len - 4)
+                        pieces.add(r.bytes(len - 4))
                     } else r.skip(len - 4)
                 } else r.skip(len)
                 if (++blocks > 4096) throw FlacFormatException("too many metadata blocks")
                 if (last == 1) break
+            }
+            if (pieces.size == 1) apps[FlacFile.APP_ID] = pieces[0]
+            else if (pieces.size > 1) {
+                val all = ByteArray(evidenceSize.toInt())
+                var off = 0
+                for (p in pieces) { System.arraycopy(p, 0, all, off, p.size); off += p.size }
+                apps[FlacFile.APP_ID] = all
             }
             val si = info ?: throw FlacFormatException("missing STREAMINFO")
             if (si.channels !in 1..2 || (si.bps != 16 && si.bps != 24)) throw FlacFormatException("unsupported audio format")

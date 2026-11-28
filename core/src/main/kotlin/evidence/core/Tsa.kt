@@ -87,6 +87,12 @@ object Tsa {
 
     private fun spki(c: X509CertificateHolder) = sha256(c.subjectPublicKeyInfo.encoded).hex()
 
+    /** The SHA-256 digest a token covers, read without checking anything else; null if it covers another kind of digest. */
+    fun imprint(token: ByteArray): ByteArray? {
+        val info = TimeStampToken(CMSSignedData(token)).timeStampInfo
+        return if (info.messageImprintAlgOID == TSPAlgorithms.SHA256) info.messageImprintDigest else null
+    }
+
     /** Checks a token offline: signature, that it covers [expectedDigest], and which trusted service issued it. */
     fun inspect(token: ByteArray, expectedDigest: ByteArray): TokenInfo {
         val tst = TimeStampToken(CMSSignedData(token))

@@ -2,9 +2,13 @@
 // Copyright (C) 2026 HexRelic
 
 import evidence.core.*
+import evidence.core.flac.BitWriter
+import evidence.core.flac.Crc
 import evidence.core.flac.FlacDecoder
 import evidence.core.flac.FlacEncoder
 import evidence.core.flac.FlacFile
+import evidence.core.flac.FlacFormatException
+import evidence.core.flac.StreamInfo
 import kotlinx.serialization.encodeToString
 import org.bouncycastle.asn1.x500.X500Name
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
@@ -279,6 +283,259 @@ class CoreTest {
         val dec = FlacDecoder.open(ByteArrayInputStream(out.toByteArray()))
         assertArrayEquals(big, dec.application[FlacFile.APP_ID])
         assertEquals(100, PcmReader(dec).read(IntArray(200), 200))
+    }
+
+    /** One FLAC metadata block: header (last flag, type, 24-bit length) and body. */
+    private fun block(out: ByteArrayOutputStream, last: Boolean, type: Int, body: ByteArray) {
+        out.write((if (last) 0x80 else 0) or type); out.write(body.size ushr 16); out.write(body.size ushr 8); out.write(body.size); out.write(body)
+    }
+
+    /** Evidence cut into thousands of small blocks reads back intact; the pieces are joined once, not once per block. */
+    @Test fun fragmentedEvidenceIsJoined() {
+        val fr = ByteArrayOutputStream(); val enc = FlacEncoder(fr, rate, 1, 16); enc.write(IntArray(100), 100)
+        val info = enc.finish()
+        val piece = 2048
+        val count = 4000
+        val big = ByteArray(count * piece) { (it * 31 + it / 7).toByte() }
+        val out = ByteArrayOutputStream()
+        out.write("fLaC".toByteArray())
+        block(out, false, 0, info.encode())
+        for (p in 0 until count) block(out, p == count - 1, 2, "AEv1".toByteArray() + big.copyOfRange(p * piece, (p + 1) * piece))
+        out.write(fr.toByteArray())
+        val dec = FlacDecoder.open(ByteArrayInputStream(out.toByteArray()))
+        assertArrayEquals(big, dec.application[FlacFile.APP_ID])
+        assertEquals(100, PcmReader(dec).read(IntArray(200), 200))
+    }
+
+    /** A bundle that inflates far beyond its own size is refused while unpacking; the most compressible honest one is not. */
+    @Test fun inflatedBundleIsRefused() {
+        fun zip(vararg files: Pair<String, ByteArray>): ByteArray {
+            val bo = ByteArrayOutputStream()
+            java.util.zip.ZipOutputStream(bo).use { z -> for ((n, d) in files) { z.putNextEntry(java.util.zip.ZipEntry(n)); z.write(d); z.closeEntry() } }
+            return bo.toByteArray()
+        }
+        // Honest worst case: a long all-silent recording, every slice with the same hash, perfectly steady clocks.
+        val h = sha256(ByteArray(rate * 2)).hex()
+        val silent = J.encodeToString(List(20000) { Entry("a", it * 1_000_000_000L, 1_700_000_000_000 + it * 1000L, f = rate, fl = FLAG_SILENT, h = h) }).toByteArray()
+        val honest = zip("evidence.json" to silent, "evidence.sig" to ByteArray(72))
+        println("honest silent manifest: ${silent.size} bytes, ratio %.1f".format(silent.size.toDouble() / honest.size))
+        assertTrue(silent.size > 1024 * 1024)   // large enough that the ratio, not the floor, applies
+        assertArrayEquals(silent, Bundle.decode(honest).manifestBytes)
+
+        val bomb = zip("evidence.json" to ByteArray(40 * 1024 * 1024) { ' '.code.toByte() }, "evidence.sig" to ByteArray(72))
+        assertThrows(java.io.IOException::class.java) { Bundle.decode(bomb) }
+        // Through the verifier it is a failed check, not an exception.
+        val fr = ByteArrayOutputStream(); val enc = FlacEncoder(fr, rate, 1, 16); enc.write(IntArray(100), 100)
+        val file = ByteArrayOutputStream().also { FlacFile.write(it, enc.finish(), bomb, ByteArrayInputStream(fr.toByteArray())) }
+        val r = Verifier.verify(ByteArrayInputStream(file.toByteArray()))
+        assertEquals(Status.FAIL, r.status("bundle"))
+        assertTrue(r.checks.first().detail, r.checks.first().detail.contains("larger than"))
+    }
+
+    /** LPC subframes that reference decoders refuse (negative shift, precision code 1111) are refused here too, not decoded. */
+    @Test fun invalidLpcFieldsAreRejected() {
+        val n = 16
+        fun frame(shift: Int, precisionCode: Int = 3): ByteArray {
+            val w = BitWriter()
+            w.bits(0x3FFE, 14); w.bits(0, 2)           // sync, reserved, fixed block size
+            w.bits(7, 4); w.bits(10, 4)                // block size in 16 bits after the header, 48 kHz
+            w.bits(0, 4); w.bits(4, 3); w.bits(0, 1)   // mono, 16 bit
+            w.bits(0, 8)                               // frame number 0
+            w.bits((n - 1).toLong(), 16)
+            w.bits(Crc.crc8(w.raw(), w.byteLength).toLong(), 8)
+            w.bits(0, 1); w.bits(32, 6); w.bits(0, 1)  // LPC subframe of order 1, no wasted bits
+            w.signed(100, 16)                          // warm-up sample
+            w.bits(precisionCode.toLong(), 4); w.signed(shift, 5); w.signed(1, precisionCode + 1)   // precision, shift, coefficient 1
+            w.bits(0, 2); w.bits(0, 4); w.bits(0, 4)   // Rice coding, one partition, parameter 0
+            repeat(n - 1) { w.unary(0) }               // every residual 0
+            w.align()
+            w.bits(Crc.crc16(w.raw(), w.byteLength).toLong(), 16)
+            return w.toByteArray()
+        }
+        val ok = FlacDecoder.frames(ByteArrayInputStream(frame(0)), rate, 1, 16)
+        val pcm = ok.readBlock()!!
+        assertEquals(n, ok.blockFrames)
+        assertTrue(pcm.take(n).all { it == 100 })
+        val bad = FlacDecoder.frames(ByteArrayInputStream(frame(-1)), rate, 1, 16)
+        assertThrows(FlacFormatException::class.java) { bad.readBlock() }
+        val badPrecision = FlacDecoder.frames(ByteArrayInputStream(frame(0, 15)), rate, 1, 16)
+        assertThrows(FlacFormatException::class.java) { badPrecision.readBlock() }
+    }
+
+    private fun BitWriter.sub(type: Int) { bits(0, 1); bits(type.toLong(), 6); bits(0, 1) }
+    private fun BitWriter.constant(v: Int, depth: Int = 16) { sub(0); signed(v, depth) }
+
+    /** One 16-bit frame with its header fields given as raw codes; [body] writes the subframes. */
+    private fun rawFrame(n: Int, num: ByteArray = byteArrayOf(1), sr: Int = 10, srExt: Pair<Long, Int>? = null, ch: Int = 0, reserved: Int = 0,
+                         body: BitWriter.() -> Unit): ByteArray {
+        val w = BitWriter()
+        w.bits(0x3FFE, 14); w.bits(0, 2)
+        w.bits(7, 4); w.bits(sr.toLong(), 4); w.bits(ch.toLong(), 4); w.bits(4, 3); w.bits(reserved.toLong(), 1)
+        for (b in num) w.bits(b.toLong() and 0xff, 8)
+        w.bits((n - 1).toLong(), 16)
+        srExt?.let { (v, len) -> w.bits(v, len) }
+        w.bits(Crc.crc8(w.raw(), w.byteLength).toLong(), 8)
+        body(w)
+        w.align()
+        w.bits(Crc.crc16(w.raw(), w.byteLength).toLong(), 16)
+        return w.toByteArray()
+    }
+
+    /** Decodes a good frame, [mid], a good frame (48 kHz, 16 bit); returns the sample frames read. */
+    private fun decodeAround(mid: ByteArray, channels: Int = 1, maxBlock: Int = 65535): Int {
+        fun good(i: Int) = rawFrame(32, num = byteArrayOf(i.toByte()), ch = channels - 1) { repeat(channels) { constant(1000) } }
+        val out = ByteArrayOutputStream()
+        out.write("fLaC".toByteArray())
+        block(out, true, 0, StreamInfo(16, maxBlock, 0, 0, rate, channels, 16, 0, ByteArray(16)).encode())
+        out.write(good(0)); out.write(mid); out.write(good(2))
+        val d = FlacDecoder.open(ByteArrayInputStream(out.toByteArray()))
+        var total = 0
+        while (d.readBlock() != null) total += d.blockFrames
+        return total
+    }
+
+    /**
+     * Frames that ffmpeg drops or plays differently are refused here too, so a file cannot verify
+     * while ordinary players skip or change part of its audio. Each case is one frame between two good ones.
+     */
+    @Test fun framesOtherDecodersRefuseAreRefused() {
+        val n = 32
+        fun refused(what: String, mid: ByteArray, channels: Int = 1, maxBlock: Int = 65535) =
+            assertThrows(what, FlacFormatException::class.java) { decodeAround(mid, channels, maxBlock) }
+        fun accepted(what: String, mid: ByteArray, size: Int = n, channels: Int = 1, maxBlock: Int = 65535) =
+            assertEquals(what, 64 + size, decodeAround(mid, channels, maxBlock))
+
+        // frame header
+        refused("reserved header bit", rawFrame(n, reserved = 1) { constant(2000) })
+        for (c in 11..15) refused("channel code $c", rawFrame(n, ch = c) { constant(2000); constant(-2000) }, channels = 2)
+        refused("sample rate code 15", rawFrame(n, sr = 15) { constant(2000) })
+        refused("8 kHz frame in a 48 kHz stream", rawFrame(n, sr = 4) { constant(2000) })
+        refused("44.1 kHz frame in a 48 kHz stream", rawFrame(n, sr = 13, srExt = 44100L to 16) { constant(2000) })
+        for (num in listOf(byteArrayOf(0x81.toByte()), byteArrayOf(0xC0.toByte(), 0x41), byteArrayOf(0xFE.toByte()) + ByteArray(6) { 0x80.toByte() },
+                           byteArrayOf(0xFF.toByte()) + ByteArray(7) { 0x80.toByte() }))
+            refused("frame number ${num.hex()}", rawFrame(n, num = num) { constant(2000) })
+        refused("block above the STREAMINFO maximum", rawFrame(64) { constant(2000) }, maxBlock = 32)
+        refused("block of 65536", rawFrame(65536) { constant(2000) })
+        // residuals that do not fit 32 bits
+        refused("Rice value 0xFFFFFFFF", rawFrame(n) { sub(9); signed(0, 16); bits(1, 2); bits(0, 4); bits(16, 5); unary(0xFFFF); bits(0xFFFF, 16); repeat(n - 2) { unary(0); bits(0, 16) } })
+        refused("Rice value over 32 bits", rawFrame(n) { sub(9); signed(0, 16); bits(0, 2); bits(0, 4); bits(14, 4); unary(0x40001); bits(2, 14); repeat(n - 2) { unary(0); bits(0, 14) } })
+        // samples outside the bit depth
+        refused("left/side, right over range", rawFrame(n, ch = 8) { constant(32767); constant(-65536, 17) }, channels = 2)
+        refused("right/side, left over range", rawFrame(n, ch = 9) { constant(-65536, 17); constant(32767) }, channels = 2)
+        refused("mid/side, left over range", rawFrame(n, ch = 10) { constant(32767); constant(65535, 17) }, channels = 2)
+        refused("LPC sum past 32 bits", rawFrame(n) { sub(32); signed(32767, 16); bits(14, 4); signed(14, 5); signed(16383, 15); bits(0, 2); bits(0, 4); bits(15, 4); bits(22, 5); signed(1 shl 20, 22); repeat(n - 2) { signed(0, 22) } })
+        refused("fixed predictor past the bit depth", rawFrame(n) { sub(9); signed(30000, 16); bits(0, 2); bits(0, 4); bits(10, 4); unary(19); bits(544, 10); repeat(n - 2) { unary(0); bits(0, 10) } })
+
+        // what stays valid
+        accepted("rate taken from STREAMINFO", rawFrame(n, sr = 0) { constant(2000) })
+        accepted("48 kHz as kHz", rawFrame(n, sr = 12, srExt = 48L to 8) { constant(2000) })
+        accepted("48 kHz as Hz", rawFrame(n, sr = 13, srExt = 48000L to 16) { constant(2000) })
+        accepted("48 kHz as tens of Hz", rawFrame(n, sr = 14, srExt = 4800L to 16) { constant(2000) })
+        accepted("six-byte frame number", rawFrame(n, num = byteArrayOf(0xFC.toByte()) + ByteArray(5) { 0x80.toByte() }) { constant(2000) })
+        accepted("block equal to the STREAMINFO maximum", rawFrame(32) { constant(2000) }, maxBlock = 32)
+        accepted("left/side at both extremes", rawFrame(n, ch = 8) { constant(32767); constant(65535, 17) }, channels = 2)
+        accepted("full-scale verbatim", rawFrame(n) { sub(1); repeat(n) { signed(if (it % 2 == 0) -32768 else 32767, 16) } })
+        accepted("LPC at full precision", rawFrame(n) { sub(32); signed(20000, 16); bits(14, 4); signed(15, 5); signed(16383, 15); bits(0, 2); bits(0, 4); bits(0, 4); repeat(n - 1) { unary(0) } })
+    }
+
+    /** A well-formed timestamp token over [digest] from a made-up authority: valid, but not from a trusted service. */
+    private fun selfMadeToken(digest: ByteArray): ByteArray {
+        val kp = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+        val name = X500Name("CN=Test Time Stamping")
+        val cert = JcaX509v3CertificateBuilder(name, BigInteger.TWO, Date(0), Date(4102444800000L), name, kp.public)
+            .addExtension(org.bouncycastle.asn1.x509.Extension.extendedKeyUsage, true, org.bouncycastle.asn1.x509.ExtendedKeyUsage(org.bouncycastle.asn1.x509.KeyPurposeId.id_kp_timeStamping))
+            .build(JcaContentSignerBuilder("SHA256withRSA").build(kp.private))
+        val gen = org.bouncycastle.tsp.TimeStampTokenGenerator(
+            org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoGeneratorBuilder().build("SHA256withRSA", kp.private, JcaX509CertificateConverter().getCertificate(cert)),
+            org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder().build().get(org.bouncycastle.asn1.x509.AlgorithmIdentifier(org.bouncycastle.asn1.nist.NISTObjectIdentifiers.id_sha256)),
+            org.bouncycastle.asn1.ASN1ObjectIdentifier("0.4.0.2023.1.1"))
+        gen.addCertificates(org.bouncycastle.cert.jcajce.JcaCertStore(listOf(cert)))
+        val req = org.bouncycastle.tsp.TimeStampRequestGenerator().apply { setCertReq(true) }.generate(org.bouncycastle.tsp.TSPAlgorithms.SHA256, digest)
+        return gen.generate(req, BigInteger.ONE, Date()).encoded
+    }
+
+    /**
+     * Many checkpoints sharing one size cost one token check per intermediate timestamp, not one
+     * per checkpoint, and the checkpoint a token really covers is still found among them.
+     */
+    @Test(timeout = 20_000) fun midTimestampsAreMatchedOnce() {
+        val dir = File("build/test-out").apply { mkdirs() }
+        val f = File(dir, "mid-src.flac")
+        val signer = SoftSigner()
+        val m = record(4, signer, signer, f).manifest
+        val target = m.checkpoints.first()
+        val digest = sha256(Wire.checkpoint(m.sessionId.unhex(), target.size, target.root.unhex(), target.en, target.w))
+        val decoys = List(3000) { Checkpoint(target.size, "00".repeat(32), it.toLong(), 0, "") }
+        val elsewhere = res("accv.tsr").b64()   // a real token, over something else
+        val edited = m.copy(
+            checkpoints = decoys + m.checkpoints,
+            mid = List(100) { MidAnchor(target.size, "accv", elsewhere) } + MidAnchor(target.size, "test", selfMadeToken(digest).b64()),
+        )
+        val mb = J.encodeToString(edited).toByteArray()
+        val out = File(dir, "mid.flac")
+        f.inputStream().use { i -> out.outputStream().use { o -> FlacFile.replaceEvidence(i, o, Bundle(mb, signer.sign(mb), emptyList()).encode()) } }
+        val r = verify(out)
+        assertEquals(100, r.checks.count { it.id == "time-mid" && it.status == Status.FAIL })
+        // the self-made token found its checkpoint: valid, so only its issuer is questioned
+        assertEquals(1, r.checks.count { it.id == "time-issuer" && it.status == Status.WARN })
+        assertEquals(Status.FAIL, r.status("log"))   // the decoys themselves are invalid checkpoints
+    }
+
+    /** Only ASCII hex digits decode; other characters, including other scripts' digits, are refused. */
+    @Test fun hexIsStrict() {
+        assertArrayEquals(byteArrayOf(0, 0x7f, -1, 0xab.toByte()), "007fFFab".unhex())
+        for (bad in listOf("zz", "0g", "０１", "ａａ", "٠١", "-1", " 1", "1\u0000"))
+            assertThrows(bad, IllegalArgumentException::class.java) { bad.unhex() }
+    }
+
+    /** Replacing the evidence keeps the file's other metadata; only the old evidence goes. Our own files come out exactly as before. */
+    @Test fun replaceEvidenceKeepsOtherMetadata() {
+        val fr = ByteArrayOutputStream(); val enc = FlacEncoder(fr, rate, 1, 16); enc.write(signal(5000, 1, 3), 5000)
+        val info = enc.finish()
+        val frames = fr.toByteArray()
+        val tags = "tags".toByteArray() + ByteArray(40) { it.toByte() }
+        val foreign = "TEST".toByteArray() + ByteArray(10) { 7 }
+        val src = ByteArrayOutputStream()
+        src.write("fLaC".toByteArray())
+        block(src, false, 0, info.encode())
+        block(src, false, 4, tags)
+        block(src, false, 2, "AEv1old".toByteArray())
+        block(src, false, 2, foreign)
+        block(src, false, 9, ByteArray(5))     // reserved type: dropped, as before
+        block(src, true, 1, ByteArray(100))    // padding
+        src.write(frames)
+        val b = ByteArrayOutputStream().also { FlacFile.replaceEvidence(ByteArrayInputStream(src.toByteArray()), it, "new".toByteArray()) }.toByteArray()
+
+        val blocks = ArrayList<Triple<Boolean, Int, ByteArray>>()
+        var p = 4
+        while (true) {
+            val h = b[p].toInt() and 0xff
+            val len = ((b[p + 1].toInt() and 0xff) shl 16) or ((b[p + 2].toInt() and 0xff) shl 8) or (b[p + 3].toInt() and 0xff)
+            blocks += Triple(h and 0x80 != 0, h and 0x7f, b.copyOfRange(p + 4, p + 4 + len))
+            p += 4 + len
+            if (h and 0x80 != 0) break
+        }
+        assertEquals(listOf(0, 4, 2, 1, 2), blocks.map { it.second })
+        assertEquals(listOf(false, false, false, false, true), blocks.map { it.first })
+        assertArrayEquals(tags, blocks[1].third)
+        assertArrayEquals(foreign, blocks[2].third)
+        assertArrayEquals(ByteArray(100), blocks[3].third)
+        assertArrayEquals(frames, b.copyOfRange(p, b.size))
+        val dec = FlacDecoder.open(ByteArrayInputStream(b))
+        assertArrayEquals("new".toByteArray(), dec.application[FlacFile.APP_ID])
+        assertEquals(5000, PcmReader(dec).read(IntArray(6000), 6000))
+
+        // A file as the app writes it (STREAMINFO + evidence) is rewritten byte for byte as before.
+        val own = ByteArrayOutputStream().also { FlacFile.write(it, info, "old".toByteArray(), ByteArrayInputStream(frames)) }
+        val again = ByteArrayOutputStream().also { FlacFile.replaceEvidence(ByteArrayInputStream(own.toByteArray()), it, "new".toByteArray()) }
+        val expected = ByteArrayOutputStream().also { FlacFile.write(it, info, "new".toByteArray(), ByteArrayInputStream(frames)) }
+        assertArrayEquals(expected.toByteArray(), again.toByteArray())
+
+        // What is carried over is bounded.
+        val many = ByteArrayOutputStream()
+        many.write("fLaC".toByteArray()); block(many, false, 0, info.encode())
+        repeat(300) { block(many, it == 299, 4, ByteArray(1)) }
+        assertThrows(FlacFormatException::class.java) { FlacFile.replaceEvidence(ByteArrayInputStream(many.toByteArray()), ByteArrayOutputStream(), "x".toByteArray()) }
     }
 
     /** Stereo, 16 and 24 bit: similar channels, opposite channels and unrelated channels all survive exactly. */

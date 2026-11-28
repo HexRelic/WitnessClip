@@ -26,9 +26,17 @@ fun ByteArray.hex(): String {
     return sb.toString()
 }
 
+/** ASCII hex digits only: Character.digit would also take other scripts' digits and map anything else to -1. */
+private fun hexDigit(c: Char): Int = when (c) {
+    in '0'..'9' -> c - '0'
+    in 'a'..'f' -> c - 'a' + 10
+    in 'A'..'F' -> c - 'A' + 10
+    else -> throw IllegalArgumentException("invalid hex digit")
+}
+
 fun String.unhex(): ByteArray {
     require(length % 2 == 0) { "odd hex length" }
-    return ByteArray(length / 2) { ((Character.digit(this[it * 2], 16) shl 4) or Character.digit(this[it * 2 + 1], 16)).toByte() }
+    return ByteArray(length / 2) { ((hexDigit(this[it * 2]) shl 4) or hexDigit(this[it * 2 + 1])).toByte() }
 }
 
 fun ByteArray.b64(): String = Base64.getEncoder().encodeToString(this)
