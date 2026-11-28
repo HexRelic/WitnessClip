@@ -133,7 +133,8 @@ class Engine(private val app: App, private val service: RecorderService) {
     private val sealer = Sealer(sid)
     private val lock = Any()
     private val routes = ArrayList<Route>()
-    private val journal = BufferedWriter(File(dir, "journal.jsonl").writer())
+    private val journalFd = FileOutputStream(File(dir, "journal.jsonl"))
+    private val journal = BufferedWriter(journalFd.writer())
     private val framesFile = File(dir, "frames.bin")
     private val framesFd = FileOutputStream(framesFile)
     private val framesOut = BufferedOutputStream(framesFd, 1 shl 16)
@@ -418,7 +419,9 @@ class Engine(private val app: App, private val service: RecorderService) {
             leaves++
             peaks.write(((peak.toLong() * 255 / FULL_SCALE).toInt()))
             RecState.seconds.value = leaves
-            if (leaves % 5 == 0) try { framesFd.fd.sync() } catch (_: Exception) {}
+            // Recovery keeps only the seconds found in both files, so both reach the disk
+            // together: a power cut loses at most the last five seconds.
+            if (leaves % 5 == 0) try { framesFd.fd.sync(); journalFd.fd.sync() } catch (_: Exception) {}
             // Every ten seconds the key signs everything so far; every five minutes that
             // signed state is also sent for an independent timestamp, so a long recording is
             // certified along the way and not only at its two ends.
