@@ -46,8 +46,12 @@ sha256sum app/build/outputs/apk/release/app-release-unsigned.apk
 ```
 
 The hash should match the `-unsigned.apk` line in the `SHA256SUMS.txt` attached to the
-release. For version 0.1.0 it is
-`c2e6c06b4eb1efa029dd4fb836761e8f1860164ef116b7d00220c3e78ab11958`.
+release:
+
+| Version | Unsigned APK (SHA-256) |
+|---|---|
+| 0.1.1 | `1742a16f26b17655d4b8d388ecc3eac7883a9e83ea520104ed02e9b601221acd` |
+| 0.1.0 | `c2e6c06b4eb1efa029dd4fb836761e8f1860164ef116b7d00220c3e78ab11958` |
 
 To confirm that builds are reproducible on your own machine:
 
@@ -65,7 +69,7 @@ A signed APK differs from the unsigned build only by its signature block.
 signature from the published APK onto your build and checks that the result is valid:
 
 ```bash
-apksigcopier compare WitnessClip-0.1.0.apk --unsigned app/build/outputs/apk/release/app-release-unsigned.apk
+apksigcopier compare WitnessClip-0.1.1.apk --unsigned app/build/outputs/apk/release/app-release-unsigned.apk
 ```
 
 If it succeeds, the published APK was built from this source and nothing else.
@@ -73,7 +77,7 @@ If it succeeds, the published APK was built from this source and nothing else.
 To see which certificate signed an APK:
 
 ```bash
-apksigner verify --print-certs WitnessClip-0.1.0.apk
+apksigner verify --print-certs WitnessClip-0.1.1.apk
 ```
 
 ## Signing certificate

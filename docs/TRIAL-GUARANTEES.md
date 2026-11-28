@@ -123,9 +123,10 @@ of microphone, storage running out, the app being killed.
 A removed stretch would show up as a mismatch between samples and clock, or would break the
 hash tree. A real interruption is visible and dated in the file rather than hidden.
 
-If the app is killed or the phone dies, the recording ends there. Everything captured up to
-the last second is recovered and sealed at the next start, marked as interrupted. The time
-between the interruption and the next start is not covered.
+If the app is killed or the phone dies, the recording ends there. What was captured is
+recovered and sealed at the next start, marked as interrupted: everything up to the last
+second if the app was killed, and all but at most the last five seconds after a sudden loss of
+power. The time between the interruption and the next start is not covered.
 
 ## 6. Same device
 

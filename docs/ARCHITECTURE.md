@@ -199,7 +199,7 @@ App-private storage, excluded from every backup and device transfer. One folder 
 | File | While recording | After sealing |
 |---|---|---|
 | `frames.bin` | FLAC frames, flushed every second, forced to disk every 5 s | deleted |
-| `journal.jsonl` | Every log entry, checkpoint, input device and timestamp as it happens | deleted |
+| `journal.jsonl` | Every log entry, checkpoint, input device and timestamp as it happens, forced to disk together with the frames every 5 s | deleted |
 | `recording.flac` | – | The sealed file: audio plus proof |
 | `meta.json` | List entry (title, duration, waveform). Not part of the seal | same |
 
@@ -233,7 +233,9 @@ block (ID `AEv1`, split in pieces of 8 MB, at most 96 MB) carries a small ZIP:
 
 The encoder and decoder are our own Kotlin code (fixed predictors with Rice coding, 16 and 24
 bit, mono and stereo with left/side coding). The same input always gives the same bytes, and
-the tests compare the output with ffmpeg.
+the tests compare the output with ffmpeg. The decoder refuses every frame that ffmpeg or
+libFLAC would refuse or decode differently (reserved codes, samples outside the bit depth and
+the like), so the audio the verifier checks is the audio any player plays.
 
 ### 7.2 Export (`app`, `Export.kt`; `core`, `Exporter.kt`, `Asic.kt`, `pdf/PdfA.kt`)
 
@@ -249,8 +251,9 @@ The lawyer can add their own qualified signature to the ASiC-E package without t
 ## 8. The verifier (`core`, `Verifier.kt`)
 
 One function, used by the app, by the command line and by the tests. It never throws: every
-problem becomes a failed check. Sizes are bounded before anything is allocated, so a hostile
-file cannot exhaust memory.
+problem becomes a failed check. Sizes are bounded before anything is allocated, and the
+evidence may unpack to at most 64 times its own size, so a hostile file cannot exhaust memory.
+A file too large for the memory available is reported as a failed check too.
 
 | Check | Fails when |
 |---|---|

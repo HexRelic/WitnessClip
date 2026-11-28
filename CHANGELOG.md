@@ -5,6 +5,23 @@ All notable changes to WitnessClip. Format based on
 [Semantic Versioning](https://semver.org/). The store changelog for each release is in
 `fastlane/metadata/android/<language>/changelogs/<versionCode>.txt`.
 
+## [0.1.1] - 2026-11-28
+
+### Fixed
+- A sudden power cut during a recording now loses at most the last five seconds instead of up
+  to about thirty: the log of sealed seconds is forced to disk together with the audio.
+- The verifier reports a damaged or altered file as a failed check in every case, never as a
+  crash or an endless check. Evidence that unpacks to far more than its own size is refused,
+  running out of memory is a failed check, long evidence is read in one pass, and intermediate
+  timestamps are matched to their checkpoint once.
+- The verifier refuses audio frames that ffmpeg or libFLAC would skip or decode differently,
+  so a file cannot pass the check while ordinary players play something else.
+- Adding the closing timestamps keeps the file's tags, pictures and other metadata.
+- Hexadecimal values in a recording's proof are read as plain ASCII digits only.
+
+### Documentation
+- Privacy policy published in the repository, in English and Italian (`docs/legal/`).
+
 ## [0.1.0] - 2026-11-20
 
 First release.
@@ -41,4 +58,5 @@ First release.
 - Reproducible release build, dependencies pinned by SHA-256, APK structure check against
   malformed ZIP entries, scripted signing.
 
+[0.1.1]: https://github.com/HexRelic/WitnessClip/releases/tag/v0.1.1
 [0.1.0]: https://github.com/HexRelic/WitnessClip/releases/tag/v0.1.0

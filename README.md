@@ -162,6 +162,7 @@ confirm that the published app comes from this source. See
 - [Architecture](docs/ARCHITECTURE.md)
 - [Reproducible builds and releases](docs/REPRODUCIBLE.md)
 - [Third-party components](docs/DEPENDENCIES.md)
+- Privacy policy: [English](docs/legal/privacy-policy.md), [Italiano](docs/legal/informativa-privacy.md)
 
 ## Contributing
 
